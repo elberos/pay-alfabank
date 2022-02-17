@@ -28,8 +28,211 @@ if (!defined('ABSPATH')) exit;
 class Helper
 {
 	
+	
 	/**
-	 * REST вызов
+	 * Create and register transaction
+	 */
+	public static function registerDo($params)
+	{
+		global $wpdb;
+		
+		$price = isset($params["price"]) ? (int)$params["price"] : 0;
+		$invoice_id = isset($params["invoice_id"]) ? $params["invoice_id"] : "";
+		$return_url = isset($params["return_url"]) ? $params["return_url"] : "";
+		$description = isset($params["description"]) ? $params["description"] : "";
+		$currency = isset($params["currency"]) ? $params["currency"] : "KZT";
+		$transaction = null;
+		$response = null;
+		
+		/* Create transaction */
+		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$wpdb->insert
+		(
+			$table_name_products,
+			[
+				"invoice_id" => $invoice_id,
+				"price" => $price,
+				"price_pay" => 0,
+				"currency" => $currency,
+			]
+		);
+		$transaction_id = $wpdb->insert_id;
+		
+		/* If transaction created */
+		if ($transaction_id > 0)
+		{
+			/* Send request */
+			$data = array
+			(
+				'returnUrl' => $return_url,
+				'orderNumber' => $transaction_id,
+				'description' => $invoice_number,
+				'amount' => $price * 100, // РЎСѓРјРјР° РїР»Р°С‚РµР¶Р° РІ РєРѕРїРµР№РєР°С… РёР»Рё С†РµРЅС‚Р°С…
+				'currency' => $currency,
+			);
+			
+			$response = Gateway::restCall('register', $data);
+			
+			/* РћР±СЂР°Р±РѕС‚РєР° СЂРµР·СѓР»СЊС‚Р°С‚Р° */
+			if ($response)
+			{
+				$errorCode = isset($response['errorCode']) ? $response['errorCode'] : 0;
+				$errorMessage = isset($response['errorMessage']) ? $response['errorMessage'] : "";
+				$orderId = isset($response['orderId']) ? $response['orderId'] : "";
+				
+				$wpdb->update
+				(
+					$table_name_transactions,
+					[
+						"res_code" => $errorCode,
+						"res_desc" => $errorMessage,
+						"order_id" => $orderId,
+					],
+					[
+						"id" => $transaction_id,
+					]
+				);
+				
+				/* Get updated transaction */
+				$sql = \Elberos\wpdb_prepare
+				(
+					"select * from `${table_name_transactions}` " .
+					"where id = :transaction_id ",
+					[
+						"id" => $transaction_id,
+					]
+				);
+				$transaction = $wpdb->get_row($sql, ARRAY_A);
+			}
+		}
+		
+		return
+		[
+			"transaction_id" => $transaction_id,
+			"transaction" => $transaction,
+			"invoice_id" => $invoice_id,
+			"response" => $response,
+		];
+	}
+	
+	
+	
+	/**
+	 * Get and update transaction status
+	 */
+	public static function getOrderStatus($params)
+	{
+		global $wpdb;
+		
+		$is_complete = false;
+		$transaction_id = isset($params["transaction_id"]) ? $params["transaction_id"] : "";
+		$response = null;
+		
+		/* Find transaction */
+		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$sql = \Elberos\wpdb_prepare
+		(
+			"select * from `${table_name_transactions}` " .
+			"where id = :transaction_id ",
+			[
+				"id" => $transaction_id,
+			]
+		);
+		$transaction = $wpdb->get_row($sql, ARRAY_A);
+		$transaction_new = null;
+		
+		if ($transaction)
+		{
+			/* Send request */
+			$data = array
+			(
+				'orderId' => $transaction_id,
+			);
+			$response = Gateway::restCall('getOrderStatus', $data);
+			
+			/* РћР±СЂР°Р±РѕС‚РєР° СЂРµР·СѓР»СЊС‚Р°С‚Р° */
+			$amount = isset($response['Amount']) ? $response['Amount'] : 0;
+			$Pan = isset($response['Pan']) ? $response['Pan'] : 0;
+			$cardholderName = isset($response['cardholderName']) ? $response['cardholderName'] : 0;
+			$OrderStatus = isset($response['OrderStatus']) ? $response['OrderStatus'] : 0;
+			$OrderNumber = isset($response['OrderNumber']) ? $response['OrderNumber'] : 0;
+			$errorCode = isset($response['errorCode']) ? $response['errorCode'] : 
+				(isset($response['ErrorCode']) ? $response['ErrorCode'] : 0);
+			$errorMessage = isset($response['errorMessage']) ? $response['errorMessage'] : 
+				(isset($response['ErrorMessage']) ? $response['ErrorMessage'] : 0);
+			
+			if ($OrderStatus == 2)
+			{
+				// РЎСѓРјРјР° РїР»Р°С‚РµР¶Р° РІ РєРѕРїРµР№РєР°С… РёР»Рё С†РµРЅС‚Р°С…
+				$amount = $amount / 100;
+				
+				if ($transaction['status'] != $OrderStatus)
+				{
+					$transaction_update = [];
+					$transaction_update['status'] = $OrderStatus;
+					$transaction_update['res_code'] = $errorCode;
+					$transaction_update['res_desc'] = $errorMessage;
+					$transaction_update['price_pay'] = $amount;
+					$transaction_update['pay_desc'] = $Pan . " " . $cardholderName;
+					
+					$wpdb->update
+					(
+						$table_name_transactions,
+						$transaction_update,
+						[
+							"id" => $transaction_id,
+						]
+					);
+					
+					$is_complete = true;
+				}
+			}
+			else
+			{
+				if ($alfabank_pay->status != $OrderStatus)
+				{
+					$transaction_update = [];
+					$transaction_update['status'] = $OrderStatus;
+					$transaction_update['res_code'] = $errorCode;
+					$transaction_update['res_desc'] = $errorMessage;
+					$transaction_update['pay_desc'] = $Pan . " " . $cardholderName;
+					
+					$wpdb->update
+					(
+						$table_name_transactions,
+						$transaction_update,
+						[
+							"id" => $transaction_id,
+						]
+					);
+				}
+			}
+			
+			$sql = \Elberos\wpdb_prepare
+			(
+				"select * from `${table_name_transactions}` " .
+				"where id = :transaction_id ",
+				[
+					"id" => $transaction_id,
+				]
+			);
+			$transaction_new = $wpdb->get_row($sql, ARRAY_A);
+		}
+		
+		return
+		[
+			"response" => $response,
+			"is_complete" => $is_complete,
+			"transaction_id" => $transaction_id,
+			"transaction_old" => $transaction_old,
+			"transaction_new" => $transaction_new,
+		];
+	}
+	
+	
+	
+	/**
+	 * REST РІС‹Р·РѕРІ
 	 * @params string $method
 	 * @params array $data
 	 */
@@ -54,30 +257,30 @@ class Helper
 		}
 		
 		
-		// Устанавливаем логин и пароль
+		// РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј Р»РѕРіРёРЅ Рё РїР°СЂРѕР»СЊ
 		$data['userName'] = $username;
 		$data['password'] = $password;
 		
-		// Инициализируем запрос
+		// РРЅРёС†РёР°Р»РёР·РёСЂСѓРµРј Р·Р°РїСЂРѕСЃ
 		$curl = curl_init(); 
 		curl_setopt_array($curl, array
 		(
-			CURLOPT_URL => $url, // Полный адрес метода
-			CURLOPT_RETURNTRANSFER => true, // Возвращать ответ
-			CURLOPT_POST => true, // Метод POST
-			CURLOPT_POSTFIELDS => http_build_query($data) // Данные в запросе
+			CURLOPT_URL => $url, // РџРѕР»РЅС‹Р№ Р°РґСЂРµСЃ РјРµС‚РѕРґР°
+			CURLOPT_RETURNTRANSFER => true, // Р’РѕР·РІСЂР°С‰Р°С‚СЊ РѕС‚РІРµС‚
+			CURLOPT_POST => true, // РњРµС‚РѕРґ POST
+			CURLOPT_POSTFIELDS => http_build_query($data) // Р”Р°РЅРЅС‹Рµ РІ Р·Р°РїСЂРѕСЃРµ
 		));
 		
-		// Выполняем запрос
+		// Р’С‹РїРѕР»РЅСЏРµРј Р·Р°РїСЂРѕСЃ
 		$response = curl_exec($curl); 
 		
-		// Декодируем из JSON в массив
+		// Р”РµРєРѕРґРёСЂСѓРµРј РёР· JSON РІ РјР°СЃСЃРёРІ
 		$response = json_decode($response, true);
 		
-		// Закрываем соединение
+		// Р—Р°РєСЂС‹РІР°РµРј СЃРѕРµРґРёРЅРµРЅРёРµ
 		curl_close($curl);
 		
-		// Возвращаем ответ
+		// Р’РѕР·РІСЂР°С‰Р°РµРј РѕС‚РІРµС‚
 		return $response;
 	}
 	
