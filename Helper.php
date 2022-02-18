@@ -30,48 +30,108 @@ class Helper
 	
 	
 	/**
-	 * Create and register transaction
+	 * Create transaction
 	 */
-	public static function registerDo($params)
+	public static function createTransaction($params)
 	{
 		global $wpdb;
 		
 		$price = isset($params["price"]) ? (int)$params["price"] : 0;
 		$invoice_id = isset($params["invoice_id"]) ? $params["invoice_id"] : "";
-		$return_url = isset($params["return_url"]) ? $params["return_url"] : "";
 		$description = isset($params["description"]) ? $params["description"] : "";
-		$currency = isset($params["currency"]) ? $params["currency"] : "KZT";
-		$transaction = null;
-		$response = null;
+		$currency = isset($params["currency"]) ? $params["currency"] : "398";
 		
 		/* Create transaction */
 		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
 		$wpdb->insert
 		(
-			$table_name_products,
+			$table_name_transactions,
 			[
 				"invoice_id" => $invoice_id,
 				"price" => $price,
 				"price_pay" => 0,
 				"currency" => $currency,
+				"description" => $description,
+				"gmtime_add" => gmdate("Y-m-d H:i:s"),
+				"gmtime_update" => gmdate("Y-m-d H:i:s"),
 			]
 		);
-		$transaction_id = $wpdb->insert_id;
+		$transaction_id = (int)($wpdb->insert_id);
+		
+		/* Get created transaction */
+		$sql = \Elberos\wpdb_prepare
+		(
+			"select * from `${table_name_transactions}` " .
+			"where id = :id ",
+			[
+				"id" => $transaction_id,
+			]
+		);
+		$transaction = $wpdb->get_row($sql, ARRAY_A);
+		
+		return $transaction;
+	}
+	
+	
+	
+	/**
+	 * Find transaction by order id
+	 */
+	public static function findTransactionByOrderId($order_id)
+	{
+		global $wpdb;
+		
+		/* Get created transaction */
+		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$sql = \Elberos\wpdb_prepare
+		(
+			"select * from `${table_name_transactions}` " .
+			"where order_id = :order_id ",
+			[
+				"order_id" => $order_id,
+			]
+		);
+		$transaction = $wpdb->get_row($sql, ARRAY_A);
+		
+		return $transaction;
+	}
+	
+	
+	
+	/**
+	 * Create and register transaction
+	 */
+	public static function registerTransaction($params)
+	{
+		global $wpdb;
+		
+		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		
+		/* Параметры */
+		$return_url = isset($params["return_url"]) ? $params["return_url"] : "";
+		$transaction = isset($params["transaction"]) ? $params["transaction"] : null;
+		$price = isset($transaction["price"]) ? (int)$transaction["price"] : 0;
+		$invoice_id = isset($transaction["invoice_id"]) ? $transaction["invoice_id"] : "";
+		$description = isset($transaction["description"]) ? $transaction["description"] : "";
+		$currency = isset($transaction["currency"]) ? $transaction["currency"] : "398";
+		$response = null;
 		
 		/* If transaction created */
-		if ($transaction_id > 0)
+		if ($transaction)
 		{
+			$transaction_id = $transaction["id"];
+			
 			/* Send request */
 			$data = array
 			(
 				'returnUrl' => $return_url,
 				'orderNumber' => $transaction_id,
-				'description' => $invoice_number,
+				'description' => $description,
 				'amount' => $price * 100, // Сумма платежа в копейках или центах
 				'currency' => $currency,
 			);
 			
-			$response = Gateway::restCall('register', $data);
+			$response = static::restCall('register', $data);
 			
 			/* Обработка результата */
 			if ($response)
@@ -87,6 +147,7 @@ class Helper
 						"res_code" => $errorCode,
 						"res_desc" => $errorMessage,
 						"order_id" => $orderId,
+						"gmtime_update" => gmdate("Y-m-d H:i:s"),
 					],
 					[
 						"id" => $transaction_id,
@@ -120,35 +181,25 @@ class Helper
 	/**
 	 * Get and update transaction status
 	 */
-	public static function getOrderStatus($params)
+	public static function getOrderStatus($transaction)
 	{
 		global $wpdb;
 		
-		$is_complete = false;
-		$transaction_id = isset($params["transaction_id"]) ? $params["transaction_id"] : "";
 		$response = null;
-		
-		/* Find transaction */
+		$is_complete = false;
+		$transaction_new = $transaction;
 		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
-		$sql = \Elberos\wpdb_prepare
-		(
-			"select * from `${table_name_transactions}` " .
-			"where id = :transaction_id ",
-			[
-				"id" => $transaction_id,
-			]
-		);
-		$transaction = $wpdb->get_row($sql, ARRAY_A);
-		$transaction_new = null;
 		
 		if ($transaction)
 		{
+			$transaction_id = $transaction["id"];
+			
 			/* Send request */
 			$data = array
 			(
-				'orderId' => $transaction_id,
+				'orderId' => $transaction["order_id"],
 			);
-			$response = Gateway::restCall('getOrderStatus', $data);
+			$response = static::restCall('getOrderStatus', $data);
 			
 			/* Обработка результата */
 			$amount = isset($response['Amount']) ? $response['Amount'] : 0;
@@ -159,37 +210,37 @@ class Helper
 			$errorCode = isset($response['errorCode']) ? $response['errorCode'] : 
 				(isset($response['ErrorCode']) ? $response['ErrorCode'] : 0);
 			$errorMessage = isset($response['errorMessage']) ? $response['errorMessage'] : 
-				(isset($response['ErrorMessage']) ? $response['ErrorMessage'] : 0);
+				(isset($response['ErrorMessage']) ? $response['ErrorMessage'] : "");
 			
 			if ($OrderStatus == 2)
 			{
 				// Сумма платежа в копейках или центах
 				$amount = $amount / 100;
 				
+				$transaction_update = [];
+				$transaction_update['status'] = $OrderStatus;
+				$transaction_update['res_code'] = $errorCode;
+				$transaction_update['res_desc'] = $errorMessage;
+				$transaction_update['price_pay'] = $amount;
+				$transaction_update['pay_desc'] = $Pan . " " . $cardholderName;
+				
+				$wpdb->update
+				(
+					$table_name_transactions,
+					$transaction_update,
+					[
+						"id" => $transaction_id,
+					]
+				);
+				
 				if ($transaction['status'] != $OrderStatus)
-				{
-					$transaction_update = [];
-					$transaction_update['status'] = $OrderStatus;
-					$transaction_update['res_code'] = $errorCode;
-					$transaction_update['res_desc'] = $errorMessage;
-					$transaction_update['price_pay'] = $amount;
-					$transaction_update['pay_desc'] = $Pan . " " . $cardholderName;
-					
-					$wpdb->update
-					(
-						$table_name_transactions,
-						$transaction_update,
-						[
-							"id" => $transaction_id,
-						]
-					);
-					
+				{	
 					$is_complete = true;
 				}
 			}
 			else
 			{
-				if ($alfabank_pay->status != $OrderStatus)
+				if ($transaction['status'] != $OrderStatus)
 				{
 					$transaction_update = [];
 					$transaction_update['status'] = $OrderStatus;
@@ -224,7 +275,7 @@ class Helper
 			"response" => $response,
 			"is_complete" => $is_complete,
 			"transaction_id" => $transaction_id,
-			"transaction_old" => $transaction_old,
+			"transaction_old" => $transaction,
 			"transaction_new" => $transaction_new,
 		];
 	}
@@ -255,7 +306,6 @@ class Helper
 			if ($method == "register") $url = "https://pay.alfabank.kz/payment/rest/register.do";
 			else if ($method == "getOrderStatus") $url = "https://pay.alfabank.kz/payment/rest/getOrderStatus.do";
 		}
-		
 		
 		// Устанавливаем логин и пароль
 		$data['userName'] = $username;

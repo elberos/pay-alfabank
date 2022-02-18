@@ -29,6 +29,9 @@ if ( !class_exists( 'PAY_AlfaBank_Plugin' ) )
 if (!defined('ABSPATH')) exit;
 
 
+require_once __DIR__ . "/Helper.php";
+
+
 class PAY_AlfaBank_Plugin
 {
 	
