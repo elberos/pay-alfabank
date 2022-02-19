@@ -42,7 +42,7 @@ class Helper
 		$currency = isset($params["currency"]) ? $params["currency"] : "398";
 		
 		/* Create transaction */
-		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$table_name_transactions = $wpdb->base_prefix . "elberos_pay_alfabank_transactions";
 		$wpdb->insert
 		(
 			$table_name_transactions,
@@ -82,7 +82,7 @@ class Helper
 		global $wpdb;
 		
 		/* Get created transaction */
-		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$table_name_transactions = $wpdb->base_prefix . "elberos_pay_alfabank_transactions";
 		$sql = \Elberos\wpdb_prepare
 		(
 			"select * from `${table_name_transactions}` " .
@@ -105,7 +105,7 @@ class Helper
 	{
 		global $wpdb;
 		
-		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$table_name_transactions = $wpdb->base_prefix . "elberos_pay_alfabank_transactions";
 		
 		/* Параметры */
 		$return_url = isset($params["return_url"]) ? $params["return_url"] : "";
@@ -188,7 +188,7 @@ class Helper
 		$response = null;
 		$is_complete = false;
 		$transaction_new = $transaction;
-		$table_name_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$table_name_transactions = $wpdb->base_prefix . "elberos_pay_alfabank_transactions";
 		
 		if ($transaction)
 		{
@@ -223,6 +223,7 @@ class Helper
 				$transaction_update['res_desc'] = $errorMessage;
 				$transaction_update['price_pay'] = $amount;
 				$transaction_update['pay_desc'] = $Pan . " " . $cardholderName;
+				$transaction_update['gmtime_update'] = gmdate("Y-m-d H:i:s");
 				
 				$wpdb->update
 				(
@@ -247,6 +248,7 @@ class Helper
 					$transaction_update['res_code'] = $errorCode;
 					$transaction_update['res_desc'] = $errorMessage;
 					$transaction_update['pay_desc'] = $Pan . " " . $cardholderName;
+					$transaction_update['gmtime_update'] = gmdate("Y-m-d H:i:s");
 					
 					$wpdb->update
 					(
@@ -264,7 +266,7 @@ class Helper
 				"select * from `${table_name_transactions}` " .
 				"where id = :transaction_id ",
 				[
-					"id" => $transaction_id,
+					"transaction_id" => $transaction_id,
 				]
 			);
 			$transaction_new = $wpdb->get_row($sql, ARRAY_A);

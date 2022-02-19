@@ -46,7 +46,8 @@ class PAY_AlfaBank_Plugin
 			function()
 			{
 				require_once __DIR__ . "/include/admin-settings.php";
-				//require_once __DIR__ . "/include/admin-transactions.php";
+				require_once __DIR__ . "/include/Transactions.php";
+				require_once __DIR__ . "/include/Transactions_Table.php";
 			}
 		);
 		add_action('admin_menu', 'PAY_AlfaBank_Plugin::register_admin_menu');
@@ -55,11 +56,11 @@ class PAY_AlfaBank_Plugin
 		add_filter( 'site_transient_update_plugins', 'PAY_AlfaBank_Plugin::filter_plugin_updates' );
 		
 		/* Add cron task */
-		if ( !wp_next_scheduled( 'pay_alfabank_hourly_event' ) )
+		if ( !wp_next_scheduled( 'pay_alfabank_event' ) )
 		{
-			wp_schedule_event( time() + 60, 'hourly', 'pay_alfabank_hourly_event' );
+			wp_schedule_event( time() + 60, 'hourly', 'pay_alfabank_event' );
 		}
-		add_action( 'pay_alfabank_hourly_event', 'PAY_AlfaBank_Plugin::cron_hourly_event' );
+		add_action( 'pay_alfabank_event', 'PAY_AlfaBank_Plugin::cron_event' );
 	}
 	
 	
@@ -108,7 +109,7 @@ class PAY_AlfaBank_Plugin
 			'manage_options', 'pay-alfabank',
 			function ()
 			{
-				\Elberos\AlfaBank\Transactions::show();
+				(new \Elberos\AlfaBank\Transactions_Table())->display();
 			},
 			'/wp-content/plugins/pay-alfabank/images/alfabank.ico',
 			100
@@ -131,20 +132,35 @@ class PAY_AlfaBank_Plugin
 	/**
 	 * Cron hourly event
 	 */
-	public static function cron_hourly_event()
+	public static function cron_event()
 	{
 		global $wpdb;
 		
-		/* Отменим просроченные инвойсы */
-		/*
-		$gmtime_expire = gmdate('Y-m-d H:i:s', time());
-		$table_invoice = $wpdb->base_prefix . 'alfabank_transactions';
-		$sql = $wpdb->prepare
+		/* Поиск транзакций */
+		$table_transactions = $wpdb->base_prefix . "pay_alfabank_transactions";
+		$sql = \Elberos\wpdb_prepare
 		(
-			"UPDATE `$table_invoice` set `status`='EXPIRED' where `status`='WAITING' and `gmtime_expire`<%s",
-			$gmtime_expire
+			"select * from `${table_transactions}` " .
+			"where `status` = 0 and `gmtime_add` < :gmtime_add and `order_id` != ''",
+			[
+				"gmtime_add" => gmdate("Y-m-d H:i:s", time() - 30*60),
+			]
 		);
-		$wpdb->query($sql);*/
+		$transactions = $wpdb->get_results($sql, ARRAY_A);
+		
+		/* Обновляем информацию о платежах */
+		foreach ($transactions as $transaction)
+		{
+			$res = \Elberos\AlfaBank\Helper::getOrderStatus($transaction);
+			$transaction = $res["transaction_new"];
+			
+			/* Action update_status_pay */
+			do_action("elberos_alfabank_update_status_pay", $transaction);
+		}
+		
+		/* Отмена транзакций, где order_id пустой */
+		$sql = "UPDATE `$table_transactions` set `status`=-1 where `order_id`=''";
+		$wpdb->query($sql);
 	}
 }
 
